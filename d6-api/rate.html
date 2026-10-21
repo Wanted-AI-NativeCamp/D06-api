@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>환율 계산기</title>
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --text: #1d2433;
+    --muted: #667085;
+    --border: #e3e7ee;
+    --accent: #2f6fde;
+    --error-bg: #fff2f0;
+    --error-text: #b42318;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151c;
+      --card: #1b1f29;
+      --text: #e8ebf2;
+      --muted: #98a2b3;
+      --border: #2c3240;
+      --accent: #6c9cf0;
+      --error-bg: #2d1a1a;
+      --error-text: #f97066;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+    line-height: 1.5;
+  }
+  main { max-width: 480px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 20px; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+  }
+  .fields { display: grid; grid-template-columns: 1fr 140px; gap: 12px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  input, select {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 16px;
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .result { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
+  .krw { font-size: 36px; font-weight: 700; line-height: 1.2; word-break: break-all; }
+  .unit { color: var(--muted); font-size: 14px; margin-top: 4px; }
+  .basis { color: var(--muted); font-size: 13px; margin: 12px 0 0; }
+
+  .loading { color: var(--muted); }
+  .error {
+    background: var(--error-bg);
+    color: var(--error-text);
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .error button {
+    margin-top: 8px;
+    padding: 6px 14px;
+    border: 1px solid currentColor;
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .source { color: var(--muted); font-size: 13px; margin: 16px 0 0; }
+  .source a { color: var(--accent); }
+
+  .api-box {
+    margin-top: 32px;
+    padding: 16px;
+    border: 1px dashed var(--border);
+    border-radius: 12px;
+    font-size: 13px;
+  }
+  .api-box h2 { font-size: 15px; margin: 0 0 8px; }
+  .api-box code {
+    display: block;
+    word-break: break-all;
+    background: var(--bg);
+    padding: 8px;
+    border-radius: 8px;
+    margin-bottom: 8px;
+  }
+  .api-box a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>환율 계산기</h1>
+
+  <section class="card">
+    <div class="fields">
+      <div>
+        <label for="amount">금액</label>
+        <input id="amount" type="number" inputmode="decimal" min="0" step="any" value="100">
+      </div>
+      <div>
+        <label for="currency">통화</label>
+        <select id="currency">
+          <option value="USD">🇺🇸 USD 달러</option>
+          <option value="JPY">🇯🇵 JPY 엔</option>
+          <option value="EUR">🇪🇺 EUR 유로</option>
+          <option value="CNY">🇨🇳 CNY 위안</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="result" id="result">
+      <p class="loading">환율을 불러오는 중이에요…</p>
+    </div>
+  </section>
+
+  <p class="source">환율 데이터: <a href="https://frankfurter.dev/" target="_blank" rel="noopener">Frankfurter</a> (유럽중앙은행 기준 환율, 영업일마다 하루 한 번 발표)</p>
+
+  <section class="api-box">
+    <h2>🔌 이 화면이 쓰는 API</h2>
+    <code id="api-url"></code>
+    <a id="api-link" href="#" target="_blank" rel="noopener">새 탭에서 원본 JSON 보기</a>
+  </section>
+</main>
+
+<script>
+  const API = {
+    // 🔌 Frankfurter 환율 API (키 필요 없음) — base= 뒤 통화 1단위가 원화(KRW)로 얼마인지 알려 줘요
+    rate: (currency) => "https://api.frankfurter.dev/v2/rates?base=" + currency + "&quotes=KRW",
+  };
+
+  const CURRENCY_NAMES = { USD: "달러", JPY: "엔", EUR: "유로", CNY: "위안" };
+
+  const amountInput = document.getElementById("amount");
+  const currencySelect = document.getElementById("currency");
+  const result = document.getElementById("result");
+
+  // 마지막으로 불러온 환율 (금액만 바뀌면 API를 다시 부르지 않아요)
+  let current = null; // { currency, rate, date }
+
+  function showApiUrl(url) {
+    document.getElementById("api-url").textContent = url;
+    document.getElementById("api-link").href = url;
+  }
+
+  function render() {
+    if (!current) return;
+    const amount = parseFloat(amountInput.value);
+    const name = CURRENCY_NAMES[current.currency];
+    const krw = isNaN(amount) ? "—" : Math.round(amount * current.rate).toLocaleString("ko-KR") + "원";
+    const shownAmount = isNaN(amount) ? "금액을 입력해 주세요" : amount.toLocaleString("ko-KR") + " " + current.currency;
+
+    result.innerHTML = `
+      <div class="unit">${shownAmount} =</div>
+      <div class="krw">${krw}</div>
+      <div class="unit">1 ${current.currency}(${name}) = ${current.rate.toLocaleString("ko-KR")}원</div>
+      <p class="basis">기준 날짜: ${current.date} · 실시간 시세가 아니라 그날 발표된 기준 환율이에요.</p>
+    `;
+  }
+
+  async function loadRate() {
+    const currency = currencySelect.value;
+    const url = API.rate(currency);
+    showApiUrl(url);
+    current = null;
+    result.innerHTML = '<p class="loading">환율을 불러오는 중이에요…</p>';
+
+    try {
+      const res = await fetch(url); // 🔌 API 호출
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      const row = data.find((r) => r.quote === "KRW");
+      if (!row) throw new Error("원화(KRW) 환율이 응답에 없어요");
+
+      current = { currency, rate: row.rate, date: row.date };
+      render();
+    } catch (err) {
+      result.innerHTML = `
+        <div class="error">
+          <strong>환율을 불러오지 못했어요.</strong><br>
+          인터넷 연결이나 아래 🔌 API 주소를 확인해 주세요. (${err.message})<br>
+          <button type="button" onclick="loadRate()">다시 불러오기</button>
+        </div>
+      `;
+    }
+  }
+
+  amountInput.addEventListener("input", render);
+  currencySelect.addEventListener("change", loadRate);
+
+  loadRate();
+</script>
+</body>
+</html>
